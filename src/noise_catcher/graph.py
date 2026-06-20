@@ -124,9 +124,13 @@ def render_daily_graph(
     ax.set_xlabel("Time of day")
     ax.set_ylabel("Sound Level (dB(A))")
     ax.set_title(f"Noise Levels — {target_date.isoformat()}")
-    ax.set_ylim(bottom=0, top=max(100, max(leq_values) + 10))
+    ax.set_ylim(
+        bottom=min(0, min(leq_values) - 10),
+        top=max(100, max(leq_values) + 10),
+    )
     ax.legend(loc="upper right")
     ax.grid(True, alpha=0.3)
+    ax.axhline(y=0, color="black", linewidth=0.5, alpha=0.5)  # 0 dB reference
 
     # Time axis — auto-zoom for short recordings, full day for 24h data
     data_span = (timestamps[-1] - timestamps[0]).total_seconds()
