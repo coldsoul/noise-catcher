@@ -10,9 +10,10 @@ import sys
 from datetime import date, datetime
 
 import click
+import numpy as np
+import sounddevice as sd
 
 from noise_catcher import __version__
-from noise_catcher.capture import AudioCapture
 from noise_catcher.dsp import process_chunk
 from noise_catcher.graph import render_daily_graph
 from noise_catcher.storage import NoiseDB
@@ -71,23 +72,6 @@ def record(
     chunk_duration: float,
 ) -> None:
     """Record audio and store dB(A) levels in the database."""
-    cap = AudioCapture(device=device, sample_rate=sample_rate)
-
-    # List available devices if device lookup fails
-    try:
-        # Test device access
-        cap.record_blocking(0.1)
-    except Exception as e:
-        click.echo(f"Error accessing audio device: {e}", err=True)
-        click.echo("\nAvailable input devices:", err=True)
-        for dev in cap.list_devices():
-            click.echo(
-                f"  [{dev['index']}] {dev['name']} "
-                f"({dev['channels']} ch, {dev['default_samplerate']} Hz)",
-                err=True,
-            )
-        sys.exit(1)
-
     db = NoiseDB(db_path)
     db.initialize()
 
@@ -97,41 +81,69 @@ def record(
         f"({n_chunks} chunks of {chunk_duration}s)"
     )
 
+    # Use blocking sd.rec() — simpler and more reliable than callback streaming
+    total_frames = int(sample_rate * duration)
+    try:
+        recording = sd.rec(
+            total_frames,
+            samplerate=sample_rate,
+            channels=1,
+            device=device,
+            dtype="float32",
+        )
+        sd.wait()
+    except Exception as e:
+        click.echo(f"Error recording audio: {e}", err=True)
+        try:
+            devs = sd.query_devices()
+            input_devs = [(i, d) for i, d in enumerate(devs) if d["max_input_channels"] > 0]
+            if input_devs:
+                click.echo("\nAvailable input devices:", err=True)
+                for idx, dev in input_devs:
+                    click.echo(
+                        f"  [{idx}] {dev['name']} "
+                        f"({dev['max_input_channels']} ch, "
+                        f"{dev['default_samplerate']} Hz)",
+                        err=True,
+                    )
+        except Exception:
+            pass
+        sys.exit(1)
+
+    # Flatten and convert
+    audio = recording.flatten().astype(np.float64)
+
+    # Process in chunks
+    chunk_size = int(sample_rate * chunk_duration)
+    total_samples = 0
     samples_buffer: list[tuple[float, float, float]] = []
 
-    total_samples = 0
+    import time as _time
 
-    try:
-        import time as _time
+    for i in range(n_chunks):
+        start = i * chunk_size
+        end = start + chunk_size
+        chunk = audio[start:end]
 
-        for i, chunk in enumerate(cap.record_stream(chunk_duration_s=chunk_duration)):
-            leq = process_chunk(chunk, sample_rate)
-            # Estimate peak: 6 dB above Leq is a typical conservative estimate
-            # For real calibrated measurements, compute actual peak from samples
-            lpeak = leq + 6.0
-            ts = _time.time()
+        leq = process_chunk(chunk, sample_rate)
+        lpeak = leq + 6.0  # conservative peak estimate
+        ts = _time.time()
 
-            samples_buffer.append((ts, leq, lpeak))
+        samples_buffer.append((ts, leq, lpeak))
 
-            # Batch insert every 10 chunks for performance
-            if len(samples_buffer) >= 10:
-                db.insert_samples(samples_buffer)
-                total_samples += len(samples_buffer)
-                samples_buffer.clear()
-
-            click.echo(f"  [{ts:.1f}] Leq: {leq:.1f} dB(A)")
-
-            if i + 1 >= n_chunks:
-                break
-    except KeyboardInterrupt:
-        click.echo("\nRecording stopped by user.")
-    finally:
-        # Flush remaining samples
-        if samples_buffer:
+        if len(samples_buffer) >= 10:
             db.insert_samples(samples_buffer)
             total_samples += len(samples_buffer)
-        db.close()
+            samples_buffer.clear()
 
+        click.echo(f"  [{ts:.1f}] Leq: {leq:.1f} dB(A)")
+
+    # Flush remaining
+    if samples_buffer:
+        db.insert_samples(samples_buffer)
+        total_samples += len(samples_buffer)
+
+    db.close()
     click.echo(f"Done. {total_samples} samples stored in {db_path}")
 
 
@@ -191,15 +203,16 @@ def graph(
 @main.command()
 def list_devices() -> None:
     """List available audio input devices."""
-    cap = AudioCapture()
-    devices = cap.list_devices()
-    if not devices:
+    devs = sd.query_devices()
+    input_devs = [(i, d) for i, d in enumerate(devs) if d["max_input_channels"] > 0]
+    if not input_devs:
         click.echo("No input devices found.")
         return
 
     click.echo("Available audio input devices:")
-    for dev in devices:
+    for idx, dev in input_devs:
         click.echo(
-            f"  [{dev['index']}] {dev['name']} "
-            f"({dev['channels']} ch, {dev['default_samplerate']} Hz)"
+            f"  [{idx}] {dev['name']} "
+            f"({dev['max_input_channels']} ch, "
+            f"{dev['default_samplerate']} Hz)"
         )

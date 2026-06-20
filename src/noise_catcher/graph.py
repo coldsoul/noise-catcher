@@ -138,9 +138,7 @@ def render_daily_graph(
             timestamps[0] - timedelta(seconds=padding),
             timestamps[-1] + timedelta(seconds=padding),
         )
-        ax.xaxis.set_major_locator(
-            mdates.MinuteLocator(interval=max(1, int(data_span / 300)))
-        )
+        ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=max(1, int(data_span / 300))))
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         title += f" (recording: {data_span:.0f}s)"
     else:
