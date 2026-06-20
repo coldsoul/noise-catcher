@@ -190,13 +190,30 @@ def graph(
             click.echo(f"Invalid date: '{day_str}'. Use YYYY-MM-DD format.", err=True)
             sys.exit(1)
 
-    click.echo(f"Rendering graph for {day or 'yesterday'}...")
+    click.echo(f"Rendering graph for {day or 'today'}...")
     result = render_daily_graph(
         db_path,
         day=day,
         output_path=output,
         per_minute=not per_second,
     )
+
+    # Show what was found
+    from noise_catcher.storage import NoiseDB
+
+    check_db = NoiseDB(db_path)
+    check_db.initialize()
+    total = check_db.count_samples()
+    latest = check_db.get_latest_timestamp()
+    if latest:
+        from datetime import datetime as dt
+
+        latest_str = dt.fromtimestamp(latest).isoformat()
+        click.echo(f"Database: {total} total samples, latest: {latest_str}")
+    else:
+        click.echo(f"Database: {total} total samples (empty)")
+    check_db.close()
+
     click.echo(f"Graph saved to: {result}")
 
 
