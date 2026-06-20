@@ -54,14 +54,14 @@ class TestRenderDailyGraph:
             os.unlink(db_path)
             os.unlink(output_path)
 
-    def test_defaults_to_yesterday(self) -> None:
-        """When no date is provided, graphs yesterday (most recent complete day)."""
-        from datetime import date, timedelta
+    def test_defaults_to_today(self) -> None:
+        """When no date is provided, graphs today."""
+        from datetime import date
 
-        yesterday = date.today() - timedelta(days=1)
+        today = date.today()
         # Don't pass output_path — let the function generate the filename
         result = render_daily_graph(":memory:")
-        assert yesterday.isoformat() in result
+        assert today.isoformat() in result
         # Clean up auto-generated file
         import os
 

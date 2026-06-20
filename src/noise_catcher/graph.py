@@ -7,7 +7,7 @@ Generates a PNG time-series graph with:
 - Peak markers
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import matplotlib
 
@@ -27,9 +27,9 @@ NIGHT_END_HOUR = 6
 
 
 def _as_date(d: date | None) -> date:
-    """Return date, defaulting to yesterday so we graph a complete day."""
+    """Return date, defaulting to today for interactive use."""
     if d is None:
-        return date.today() - timedelta(days=1)
+        return date.today()
     return d
 
 
@@ -67,19 +67,31 @@ def render_daily_graph(
 
     # Prepare data
     if not rows:
-        # Generate empty graph with "no data" message
+        # Generate empty graph with helpful message
         fig, ax = plt.subplots(figsize=(16, 6))
         ax.text(
             0.5,
-            0.5,
-            "No data for this day",
+            0.6,
+            f"No data for {target_date.isoformat()}",
             ha="center",
             va="center",
             fontsize=18,
-            color="gray",
+            color="#666666",
             transform=ax.transAxes,
         )
-        ax.set_title(f"Noise Levels — {target_date.isoformat()}")
+        ax.text(
+            0.5,
+            0.4,
+            "Record audio first: noise-catcher record --duration 60",
+            ha="center",
+            va="center",
+            fontsize=12,
+            color="#999999",
+            transform=ax.transAxes,
+        )
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
         fig.tight_layout()
         fig.savefig(output_path, dpi=150)
         plt.close(fig)
