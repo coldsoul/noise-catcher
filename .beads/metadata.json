@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "noise_catcher",
+  "project_id": "9e66d1a5-7b2b-4192-a88e-59e47c4e18ca"
+}
