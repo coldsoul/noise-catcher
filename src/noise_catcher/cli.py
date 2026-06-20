@@ -99,6 +99,8 @@ def record(
 
     samples_buffer: list[tuple[float, float, float]] = []
 
+    total_samples = 0
+
     try:
         import time as _time
 
@@ -114,6 +116,7 @@ def record(
             # Batch insert every 10 chunks for performance
             if len(samples_buffer) >= 10:
                 db.insert_samples(samples_buffer)
+                total_samples += len(samples_buffer)
                 samples_buffer.clear()
 
             click.echo(f"  [{ts:.1f}] Leq: {leq:.1f} dB(A)")
@@ -126,9 +129,10 @@ def record(
         # Flush remaining samples
         if samples_buffer:
             db.insert_samples(samples_buffer)
+            total_samples += len(samples_buffer)
         db.close()
 
-    click.echo(f"Done. {db.count_samples()} samples stored in {db_path}")
+    click.echo(f"Done. {total_samples} samples stored in {db_path}")
 
 
 @main.command()
