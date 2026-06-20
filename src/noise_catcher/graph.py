@@ -62,16 +62,7 @@ def render_daily_graph(
     start_ts = datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0).timestamp()
     end_ts = start_ts + 86400  # 24 hours
 
-    # Debug: check what's actually in the DB
-    import sys
-    total = db.conn.execute("SELECT COUNT(*) FROM noise_samples").fetchone()[0]
-    first = db.conn.execute("SELECT MIN(ts), MAX(ts) FROM noise_samples").fetchone()
-    print(f"[debug] DB has {total} rows. ts range: {first[0]:.3f} – {first[1]:.3f}", file=sys.stderr)
-    print(f"[debug] Query range: {start_ts:.3f} – {end_ts:.3f}", file=sys.stderr)
-    print(f"[debug] Target date: {target_date}", file=sys.stderr)
-
     rows = db.query_range(start_ts, end_ts)
-    print(f"[debug] query_range returned {len(rows)} rows", file=sys.stderr)
     db.close()
 
     # Prepare data

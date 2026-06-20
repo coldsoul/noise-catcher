@@ -83,6 +83,9 @@ def record(
 
     # Use blocking sd.rec() — simpler and more reliable than callback streaming
     total_frames = int(sample_rate * duration)
+    import time as _time
+
+    rec_start = _time.time()
     try:
         recording = sd.rec(
             total_frames,
@@ -118,8 +121,6 @@ def record(
     total_samples = 0
     samples_buffer: list[tuple[float, float, float]] = []
 
-    import time as _time
-
     for i in range(n_chunks):
         start = i * chunk_size
         end = start + chunk_size
@@ -127,7 +128,7 @@ def record(
 
         leq = process_chunk(chunk, sample_rate)
         lpeak = leq + 6.0  # conservative peak estimate
-        ts = _time.time()
+        ts = rec_start + i * chunk_duration
 
         samples_buffer.append((ts, leq, lpeak))
 
