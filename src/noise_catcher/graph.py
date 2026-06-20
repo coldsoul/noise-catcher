@@ -7,7 +7,7 @@ Generates a PNG time-series graph with:
 - Peak markers
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import matplotlib
 
@@ -107,9 +107,6 @@ def render_daily_graph(
     # Create figure
     fig, ax = plt.subplots(figsize=(16, 6))
 
-    # Highlight night hours
-    _highlight_night_hours(ax, target_date)
-
     # Plot noise line
     ax.plot(timestamps, leq_values, linewidth=0.5, color="#1f77b4", label="Leq (dB(A))")
 
@@ -131,15 +128,33 @@ def render_daily_graph(
     ax.legend(loc="upper right")
     ax.grid(True, alpha=0.3)
 
-    # Time axis formatting
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-    ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
-    ax.set_xlim(
-        datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0),
-        datetime(target_date.year, target_date.month, target_date.day, 23, 59, 59),
-    )
-    fig.autofmt_xdate()
+    # Time axis — auto-zoom for short recordings, full day for 24h data
+    data_span = (timestamps[-1] - timestamps[0]).total_seconds()
+    title = f"Noise Levels — {target_date.isoformat()}"
 
+    if data_span < 3600:  # < 1 hour of data → zoom in
+        padding = max(60, data_span * 0.1)  # at least 1 min padding
+        ax.set_xlim(
+            timestamps[0] - timedelta(seconds=padding),
+            timestamps[-1] + timedelta(seconds=padding),
+        )
+        ax.xaxis.set_major_locator(
+            mdates.MinuteLocator(interval=max(1, int(data_span / 300)))
+        )
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+        title += f" (recording: {data_span:.0f}s)"
+    else:
+        # Full day view with night hour highlighting
+        _highlight_night_hours(ax, target_date)
+        ax.set_xlim(
+            datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0),
+            datetime(target_date.year, target_date.month, target_date.day, 23, 59, 59),
+        )
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+
+    ax.set_title(title)
+    fig.autofmt_xdate()
     fig.tight_layout()
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
