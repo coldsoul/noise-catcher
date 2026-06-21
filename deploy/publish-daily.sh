@@ -3,7 +3,8 @@
 # publish-daily.sh — Daily noise graph generation and GitHub Pages publishing
 #
 # Generates a noise graph for yesterday, copies it to a gh-pages checkout,
-# regenerates index.html, and pushes to the gh-pages branch.
+# regenerates index.html, generates the dashboard (archive + weekly/monthly
+# summaries), and pushes to the gh-pages branch.
 #
 # Idempotent: running multiple times on the same day does nothing.
 # ---------------------------------------------------------------------------
@@ -101,6 +102,13 @@ else
 HTMLEOF
     echo "Minimal index.html generated."
 fi
+
+# --- Generate dashboard (archive + summaries) --------------------------------
+echo "Generating dashboard..."
+"${NOISE_CATCHER_BIN}" dashboard \
+    --gh-pages "${GH_PAGES_DIR}" \
+    --db "${DB_PATH}" \
+    || echo "WARNING: Dashboard generation failed, continuing..."
 
 # --- Commit and push --------------------------------------------------------
 git -C "${GH_PAGES_DIR}" add -A

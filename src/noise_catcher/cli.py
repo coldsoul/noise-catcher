@@ -238,6 +238,35 @@ def list_devices() -> None:
 
 @main.command()
 @click.option(
+    "--gh-pages",
+    "gh_pages_dir",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the gh-pages checkout directory.",
+)
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(exists=True),
+    default="noise_catcher.db",
+    show_default=True,
+    help="SQLite database path.",
+)
+def dashboard(gh_pages_dir: str, db_path: str) -> None:
+    """Regenerate the archive page and weekly/monthly summary graphs."""
+    from noise_catcher.dashboard import DashboardGenerator
+
+    gen = DashboardGenerator(db_path, gh_pages_dir)
+    archive = gen.generate_archive_page()
+    weekly = gen.generate_weekly_summary()
+    monthly = gen.generate_monthly_summary()
+    click.echo(f"Archive page: {archive}")
+    click.echo(f"Weekly summary: {weekly}")
+    click.echo(f"Monthly summary: {monthly}")
+
+
+@main.command()
+@click.option(
     "--duration",
     "-d",
     type=float,
