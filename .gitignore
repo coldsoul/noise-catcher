@@ -36,5 +36,9 @@ Thumbs.db
 data/
 recordings/
 
+# Test data (local)
+test_data.db
+test-site/
+
 # Calibration files (contain serial numbers)
 *.cal
