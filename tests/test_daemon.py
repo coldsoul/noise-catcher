@@ -16,6 +16,7 @@ from noise_catcher.daemon import (
     _handle_signal,
     _rotate_db,
     is_shutdown_requested,
+    prune_old_databases,
     run_forever,
 )
 
@@ -297,3 +298,76 @@ class TestRunForever:
             # Samples were flushed to DB (insert_samples called)
             mock_db_instance.insert_samples.assert_called()
             mock_db_instance.close.assert_called_once()
+
+
+class TestPruneOldDatabases:
+    """Data retention — pruning of rotated database files."""
+
+    def test_prunes_files_older_than_max_age(self, tmp_path: Path) -> None:
+        """Files with mtime older than max_age_days are deleted."""
+        recent = tmp_path / "noise_catcher.2026-06-20.db"
+        old = tmp_path / "noise_catcher.2026-05-01.db"
+        recent.write_text("recent")
+        old.write_text("old")
+
+        old_mtime = time.time() - 60 * 86400
+        os.utime(old, (old_mtime, old_mtime))
+
+        deleted = prune_old_databases(tmp_path, max_age_days=30)
+
+        assert str(old) in deleted
+        assert str(recent) not in deleted
+        assert not old.exists()
+        assert recent.exists()
+
+    def test_no_files_pruned_when_all_recent(self, tmp_path: Path) -> None:
+        """No files deleted when all are within retention window."""
+        f1 = tmp_path / "noise_catcher.2026-06-20.db"
+        f2 = tmp_path / "noise_catcher.2026-06-21.db"
+        f1.write_text("a")
+        f2.write_text("b")
+
+        deleted = prune_old_databases(tmp_path, max_age_days=30)
+        assert deleted == []
+        assert f1.exists()
+        assert f2.exists()
+
+    def test_empty_directory_no_error(self, tmp_path: Path) -> None:
+        """Empty directory produces no errors."""
+        deleted = prune_old_databases(tmp_path, max_age_days=30)
+        assert deleted == []
+
+    def test_respects_pattern(self, tmp_path: Path) -> None:
+        """Only files matching the glob pattern are considered."""
+        matching = tmp_path / "noise_catcher.2026-05-01.db"
+        non_matching = tmp_path / "other_file.txt"
+        matching.write_text("old")
+        non_matching.write_text("keep")
+
+        old_mtime = time.time() - 60 * 86400
+        os.utime(matching, (old_mtime, old_mtime))
+        os.utime(non_matching, (old_mtime, old_mtime))
+
+        deleted = prune_old_databases(tmp_path, max_age_days=30)
+
+        assert str(matching) in deleted
+        assert str(non_matching) not in deleted
+        assert non_matching.exists()
+
+    def test_custom_max_age(self, tmp_path: Path) -> None:
+        """Custom max_age_days is respected."""
+        f = tmp_path / "noise_catcher.2026-06-15.db"
+        f.write_text("data")
+
+        mtime = time.time() - 10 * 86400
+        os.utime(f, (mtime, mtime))
+
+        deleted = prune_old_databases(tmp_path, max_age_days=7)
+        assert str(f) in deleted
+
+        f2 = tmp_path / "noise_catcher.2026-06-14.db"
+        f2.write_text("data2")
+        os.utime(f2, (mtime, mtime))
+
+        deleted2 = prune_old_databases(tmp_path, max_age_days=14)
+        assert str(f2) not in deleted2

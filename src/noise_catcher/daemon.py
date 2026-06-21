@@ -1,15 +1,15 @@
 """Signal-handling wrapper for continuous 24/7 capture daemon.
 
 Provides ``run_forever()`` which loops over 24-hour recording chunks,
-rotates the database file daily, and handles SIGTERM/SIGINT for
-graceful shutdown.
+rotates the database file daily, prunes old rotated databases, and handles
+SIGTERM/SIGINT for graceful shutdown.
 """
 
 import os
 import signal
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from noise_catcher.capture import AudioCapture
@@ -52,6 +52,42 @@ def _rotate_db(db_path: Path) -> str:
 
     os.rename(str(db_path), str(rotated_path))
     return str(rotated_path)
+
+
+def prune_old_databases(
+    directory: Path | str = ".",
+    max_age_days: int = 30,
+    pattern: str = "noise_catcher.*.db",
+) -> list[str]:
+    """Delete rotated database files older than *max_age_days*.
+
+    Scans *directory* for files matching *pattern* (glob), deletes those
+    with a modification time older than the cutoff.
+
+    Args:
+        directory: Directory to scan for rotated DB files.
+        max_age_days: Maximum age in days before deletion.
+        pattern: Glob pattern for rotated database files.
+
+    Returns:
+        List of deleted file paths.
+    """
+    dir_path = Path(directory)
+    cutoff = datetime.now() - timedelta(days=max_age_days)
+    deleted: list[str] = []
+
+    for db_file in sorted(dir_path.glob(pattern)):
+        mtime = datetime.fromtimestamp(db_file.stat().st_mtime)
+        if mtime < cutoff:
+            db_file.unlink()
+            deleted.append(str(db_file))
+            age_days = (datetime.now() - mtime).days
+            print(
+                f"Pruned old database: {db_file.name} (age: {age_days}d)",
+                file=sys.stderr,
+            )
+
+    return deleted
 
 
 def is_shutdown_requested() -> bool:
@@ -97,6 +133,9 @@ def run_forever(
         if db_path_obj.exists():
             rotated = _rotate_db(db_path_obj)
             print(f"Rotated database to {rotated}", file=sys.stderr)
+
+        # Prune rotated DBs older than 30 days
+        prune_old_databases(db_path_obj.parent, max_age_days=30)
 
         # Create fresh database
         db = NoiseDB(str(db_path_obj))
