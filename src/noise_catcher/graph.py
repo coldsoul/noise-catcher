@@ -38,6 +38,7 @@ def render_daily_graph(
     day: date | None = None,
     output_path: str | None = None,
     per_minute: bool = True,
+    show_events: bool = True,
 ) -> str:
     """Render a daily noise graph as a PNG.
 
@@ -63,6 +64,7 @@ def render_daily_graph(
     end_ts = start_ts + 86400  # 24 hours
 
     rows = db.query_range(start_ts, end_ts)
+    events = db.query_events(start_ts, end_ts) if show_events else []
     db.close()
 
     # Prepare data
@@ -109,6 +111,10 @@ def render_daily_graph(
 
     # Plot noise line
     ax.plot(timestamps, leq_values, linewidth=0.5, color="#1f77b4", label="Leq (dB(A))")
+
+    # Annotate detected events
+    if show_events:
+        _render_events(ax, events, timestamps)
 
     # WHO guideline reference
     ax.axhline(
@@ -213,3 +219,36 @@ def _highlight_night_hours(ax: plt.Axes, day: date) -> None:
     night_end_start = datetime(day.year, day.month, day.day, NIGHT_END_HOUR, 0, 0)
 
     ax.axvspan(day_start, night_end_start, alpha=0.1, color="navy")
+
+
+def _render_events(
+    ax: plt.Axes,
+    events: list[tuple[float, float, float, float, float]],
+    timestamps: list[datetime],
+) -> None:
+    """Overlay detected noise events on the graph as red vertical spans.
+
+    Each event from query_events is (id, start_ts, end_ts, max_db, duration_s).
+    """
+    if not events:
+        return
+
+    from datetime import datetime as dt
+
+    for event in events:
+        _id, start_ts, end_ts, max_db, duration_s = event
+        start_dt = dt.fromtimestamp(start_ts)
+        end_dt = dt.fromtimestamp(end_ts)
+
+        # Red vertical span for the event duration
+        ax.axvspan(
+            start_dt,
+            end_dt,
+            alpha=0.15,
+            color="red",
+            label="Noise event" if event is events[0] else "",
+        )
+
+        # Red dot at the max_db level, centered in the event time window
+        mid_dt = dt.fromtimestamp((start_ts + end_ts) / 2.0)
+        ax.plot(mid_dt, max_db, marker="o", color="red", markersize=5, linestyle="None")

@@ -1,0 +1,21 @@
+[Unit]
+Description=Noise Catcher — continuous 24/7 environmental noise monitoring
+Documentation=https://github.com/radiradichev/noise-catcher
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/noise-catcher
+ExecStart=/home/pi/noise-catcher/.venv/bin/noise-catcher daemon
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Prevent resource leaks: close non-std file descriptors
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

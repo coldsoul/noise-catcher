@@ -234,3 +234,69 @@ def list_devices() -> None:
             f"({dev['max_input_channels']} ch, "
             f"{dev['default_samplerate']} Hz)"
         )
+
+
+@main.command()
+@click.option(
+    "--duration",
+    "-d",
+    type=float,
+    default=86400.0,
+    show_default=True,
+    help="Recording duration per iteration in seconds (default 24 hours).",
+)
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(),
+    default="noise_catcher.db",
+    show_default=True,
+    help="SQLite database path.",
+)
+@click.option(
+    "--device",
+    type=str,
+    default=None,
+    help="Audio input device name or index (use list-devices to see options).",
+)
+@click.option(
+    "--sample-rate",
+    "-r",
+    type=int,
+    default=48000,
+    show_default=True,
+    help="Sample rate in Hz.",
+)
+@click.option(
+    "--chunk-duration",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Processing chunk duration in seconds.",
+)
+def daemon(
+    duration: float,
+    db_path: str,
+    device: str | None,
+    sample_rate: int,
+    chunk_duration: float,
+) -> None:
+    """Run continuous 24/7 capture daemon with daily DB rotation.
+
+    Records audio in streaming fashion, stores dB(A) levels in SQLite,
+    and rotates the database once per iteration. Handles SIGTERM/SIGINT
+    for graceful shutdown.
+    """
+    from noise_catcher.daemon import run_forever
+
+    click.echo(
+        f"Starting daemon: {duration}s iterations, "
+        f"{sample_rate} Hz, {chunk_duration}s chunks \u2192 {db_path}"
+    )
+    run_forever(
+        db_path=db_path,
+        chunk_duration=chunk_duration,
+        sample_rate=sample_rate,
+        device=device,
+        duration=duration,
+    )
