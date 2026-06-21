@@ -134,8 +134,8 @@ def run_forever(
             rotated = _rotate_db(db_path_obj)
             print(f"Rotated database to {rotated}", file=sys.stderr)
 
-        # Prune rotated DBs older than 30 days
-        prune_old_databases(db_path_obj.parent, max_age_days=30)
+        # Data pruning disabled — keeping all raw data indefinitely
+        # prune_old_databases(db_path_obj.parent, max_age_days=30)
 
         # Create fresh database
         db = NoiseDB(str(db_path_obj))

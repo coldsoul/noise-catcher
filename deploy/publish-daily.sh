@@ -81,8 +81,12 @@ echo "Graph copied to ${GH_PAGES_DIR}/graphs/."
 
 # --- Generate index.html -----------------------------------------------------
 if [[ -f "${TEMPLATE_FILE}" ]]; then
+    WEEKLY_SUMMARY_PATH="summaries/weekly_${YESTERDAY}.png"
+    MONTHLY_SUMMARY_PATH="summaries/monthly_${YESTERDAY:0:7}.png"
     sed -e "s|{{DATE}}|${YESTERDAY}|g" \
         -e "s|{{IMAGE_PATH}}|graphs/noise_${YESTERDAY}.png|g" \
+        -e "s|{{WEEKLY_SUMMARY_PATH}}|${WEEKLY_SUMMARY_PATH}|g" \
+        -e "s|{{MONTHLY_SUMMARY_PATH}}|${MONTHLY_SUMMARY_PATH}|g" \
         -e "s|{{TIMESTAMP}}|${TIMESTAMP}|g" \
         "${TEMPLATE_FILE}" > "${GH_PAGES_DIR}/index.html"
     echo "index.html generated from template."

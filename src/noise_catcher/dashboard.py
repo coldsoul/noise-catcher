@@ -1,14 +1,17 @@
 """Historical graphs and web dashboard for noise monitoring.
 
 Generates:
-- Archive page (archive.html) with thumbnail navigation grid
-- Weekly summary bar chart (weekly_summary.png) — L10/L50/L90 + Leq
-- Monthly summary bar chart (monthly_summary.png) — same for 30 days
+- Archive page (archive.html) with month/year grouped collapsible thumbnails
+- Weekly summary bar chart   → ``summaries/weekly_YYYY-MM-DD.png``  (accumulating)
+- Monthly summary bar chart  → ``summaries/monthly_YYYY-MM.png``    (accumulating)
+- All-time trend line chart  → ``all_time_trend.png``
 """
 
+import calendar
 import glob
 import math
 import os
+from collections import OrderedDict
 from datetime import date, datetime, timedelta
 
 import matplotlib
@@ -62,19 +65,40 @@ class DashboardGenerator:
         self.db_path = db_path
         self.gh_pages_dir = gh_pages_dir
         self.graphs_dir = os.path.join(gh_pages_dir, "graphs")
+        self.summaries_dir = os.path.join(gh_pages_dir, "summaries")
 
     # ------------------------------------------------------------------
-    # Archive page
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_dir(self, directory: str) -> None:
+        """Create directory if it does not exist."""
+        os.makedirs(directory, exist_ok=True)
+
+    def _find_latest_summary(self, prefix: str) -> str | None:
+        """Find the most recent summary file matching *prefix* in summaries/.
+
+        Returns the relative path (e.g. ``summaries/weekly_2026-06-21.png``)
+        or ``None`` if no file matches.
+        """
+        pattern = os.path.join(self.summaries_dir, f"{prefix}*.png")
+        files = sorted(glob.glob(pattern), reverse=True)
+        if not files:
+            return None
+        return os.path.relpath(files[0], self.gh_pages_dir)
+
+    # ------------------------------------------------------------------
+    # Archive page — month/year grouped collapsible sections
     # ------------------------------------------------------------------
 
     def generate_archive_page(self) -> str:
         """Read all available daily graphs from ``graphs/`` and generate
-        ``archive.html`` with a featured latest graph and thumbnail grid.
+        ``archive.html`` with month/year grouping, collapsible sections,
+        and a jump-to navigation bar.
 
         Returns:
             Path to the generated ``archive.html``.
         """
-        # Discover graph files sorted newest-first
         graph_files = sorted(
             glob.glob(os.path.join(self.graphs_dir, "noise_*.png")),
             reverse=True,
@@ -84,40 +108,77 @@ class DashboardGenerator:
         for gf in graph_files:
             basename = os.path.basename(gf)
             if basename.startswith("noise_") and basename.endswith(".png"):
-                date_str = basename[6:-4]  # strip "noise_" and ".png"
+                date_str = basename[6:-4]
                 entries.append((date_str, f"graphs/{basename}"))
 
-        html = self._build_archive_html(entries)
+        # Group by year-month
+        groups: OrderedDict[str, list[tuple[str, str]]] = OrderedDict()
+        for date_str, img_path in entries:
+            ym = date_str[:7]  # "2026-06"
+            groups.setdefault(ym, []).append((date_str, img_path))
+
+        # Latest summary links
+        latest_weekly = self._find_latest_summary("weekly_")
+        latest_monthly = self._find_latest_summary("monthly_")
+
+        html = self._build_archive_html(groups, latest_weekly, latest_monthly)
         output_path = os.path.join(self.gh_pages_dir, "archive.html")
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(html)
         return output_path
 
     def _build_archive_html(
-        self, entries: list[tuple[str, str]]
+        self,
+        groups: OrderedDict[str, list[tuple[str, str]]],
+        latest_weekly: str | None,
+        latest_monthly: str | None,
     ) -> str:
-        """Build the ``archive.html`` content with dark theme, featured
-        image + prev/next, and a thumbnail grid."""
-        # ---- Featured (latest) image section ----
+        """Build ``archive.html`` with dark theme, jump nav, collapsible
+        month sections, and nav links to summaries."""
+        # ---- Jump-to navigation ----
+        jump_items = ""
+        for ym in groups:
+            jump_items += (
+                f'<a href="#month-{ym}" class="jump-link">{ym}</a>\n'
+            )
+        jump_html = (
+            f'<nav class="jump-nav">Jump to: {jump_items}</nav>'
+            if jump_items
+            else ""
+        )
+
+        # ---- Featured latest image ----
+        latest_entry: tuple[str, str] | None = None
+        first_batch: list[tuple[str, str]] = []
+        if groups:
+            first_ym = next(iter(groups))
+            first_batch = groups[first_ym]
+            if first_batch:
+                latest_entry = first_batch[0]
+
         featured_html = ""
-        if entries:
-            latest_date, latest_img = entries[0]
-            # Prev links to second-newest graph file (or index.html if none)
-            prev_target = (
-                entries[1][1] if len(entries) > 1 else "index.html"
-            )
-            prev_label = (
-                entries[1][0] if len(entries) > 1 else "Latest"
-            )
-            # No "next" for the latest — it's the most recent
+        if latest_entry is not None and first_batch:
+            latest_date, latest_img = latest_entry
+            prev_target = "index.html"
+            prev_label = "Latest"
+            if len(first_batch) > 1:
+                prev_target = first_batch[1][1]
+                prev_label = first_batch[1][0]
+            elif len(groups) > 1:
+                # point to last entry of second group (next-oldest month)
+                second_ym = list(groups.keys())[1]
+                second_batch = groups[second_ym]
+                if second_batch:
+                    prev_target = second_batch[-1][1]
+                    prev_label = second_batch[-1][0]
             featured_html = (
                 f'<div class="featured-graph">'
                 f'  <a href="{latest_img}" target="_blank">'
-                f'    <img src="{latest_img}" '
+                f'    <img src="{latest_img}"'
                 f'         alt="Noise graph for {latest_date}">'
                 f"  </a>"
                 f'  <div class="nav-links">'
-                f'    <a href="{prev_target}" class="nav-btn" '
+                f'    <a href="{prev_target}" class="nav-btn"'
                 f'       title="{prev_label}">&larr; {prev_label}</a>'
                 f'    <span class="featured-date">{latest_date}</span>'
                 f'    <span class="nav-btn disabled">Next &rarr;</span>'
@@ -132,17 +193,41 @@ class DashboardGenerator:
                 "</div>"
             )
 
-        # ---- Thumbnail grid ----
-        thumbnails_html = ""
-        for date_str, img_path in entries:
-            thumbnails_html += (
-                f'<a href="{img_path}" class="thumb-link" '
-                f'   title="{date_str}" target="_blank">'
-                f'  <img src="{img_path}" '
-                f'       alt="Noise graph for {date_str}" loading="lazy">'
-                f'  <span class="thumb-date">{date_str}</span>'
-                f"</a>\n"
+        # ---- Collapsible month sections ----
+        month_sections = ""
+        for ym, batch in groups.items():
+            year, month = ym.split("-")
+            month_int = int(month)
+            month_name = calendar.month_name[month_int]
+            n_days = len(batch)
+            # Determine if this is the current (newest) month — default open
+            is_newest = ym == next(iter(groups)) if groups else False
+
+            thumbnails = ""
+            for date_str, img_path in batch:
+                thumbnails += (
+                    f'<a href="{img_path}" class="thumb-link"'
+                    f'   title="{date_str}" target="_blank">'
+                    f'  <img src="{img_path}"'
+                    f'       alt="Noise graph for {date_str}"'
+                    f'       loading="lazy">'
+                    f'  <span class="thumb-date">{date_str}</span>'
+                    f"</a>\n"
+                )
+
+            open_attr = " open" if is_newest else ""
+            month_sections += (
+                f'<details class="month-section"{open_attr}>'
+                f'  <summary id="month-{ym}">'
+                f"    {year} {month_name} ({n_days} day{'s' if n_days != 1 else ''})"
+                f"  </summary>"
+                f'  <div class="month-grid">{thumbnails}</div>'
+                f"</details>\n"
             )
+
+        # ---- Summary nav links ----
+        weekly_link = latest_weekly or "weekly_summary.png"
+        monthly_link = latest_monthly or "monthly_summary.png"
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -162,7 +247,7 @@ class DashboardGenerator:
         }}
         header {{
             text-align: center;
-            margin-bottom: 2rem;
+            margin-bottom: 1.5rem;
         }}
         h1 {{
             font-size: 2rem;
@@ -180,7 +265,7 @@ class DashboardGenerator:
             margin-top: 1rem;
             display: flex;
             justify-content: center;
-            gap: 1rem;
+            gap: 0.75rem;
             flex-wrap: wrap;
         }}
         nav.summary-links a {{
@@ -189,12 +274,26 @@ class DashboardGenerator:
             padding: 0.4rem 1rem;
             border: 1px solid #4fc3f7;
             border-radius: 6px;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             transition: background 0.2s;
         }}
         nav.summary-links a:hover {{
             background: rgba(79, 195, 247, 0.1);
             text-decoration: none;
+        }}
+        .jump-nav {{
+            text-align: center;
+            margin: 1rem 0 1.5rem;
+            font-size: 0.85rem;
+            color: #888;
+        }}
+        .jump-link {{
+            color: #4fc3f7;
+            text-decoration: none;
+            margin: 0 0.3rem;
+        }}
+        .jump-link:hover {{
+            text-decoration: underline;
         }}
         .featured-graph {{
             max-width: 1000px;
@@ -250,44 +349,56 @@ class DashboardGenerator:
             font-size: 0.95rem;
             color: #555;
         }}
-        .section-title {{
-            text-align: center;
-            font-weight: 300;
-            margin-bottom: 1.5rem;
-            color: #888;
+        .month-section {{
+            max-width: 1100px;
+            margin: 0 auto 1rem;
+            background: #16213e;
+            border-radius: 10px;
+            padding: 0.75rem 1.25rem;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
         }}
-        .thumbnail-grid {{
+        .month-section summary {{
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: #e0e0e0;
+            cursor: pointer;
+            padding: 0.5rem 0;
+            outline: none;
+        }}
+        .month-section summary:hover {{
+            color: #ffffff;
+        }}
+        .month-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 1rem;
-            max-width: 1200px;
-            margin: 0 auto;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 0.75rem;
+            padding: 0.75rem 0 0.25rem;
         }}
         .thumb-link {{
             display: block;
-            background: #16213e;
-            border-radius: 10px;
-            padding: 0.75rem;
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 0.5rem;
             text-decoration: none;
             transition: transform 0.2s, box-shadow 0.2s;
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.2);
         }}
         .thumb-link:hover {{
             transform: translateY(-2px);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4);
         }}
         .thumb-link img {{
             width: 100%;
             height: auto;
-            border-radius: 6px;
+            border-radius: 4px;
             display: block;
         }}
         .thumb-date {{
             display: block;
             text-align: center;
             color: #aaa;
-            font-size: 0.85rem;
-            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            margin-top: 0.3rem;
         }}
         footer {{
             margin-top: 2rem;
@@ -299,7 +410,8 @@ class DashboardGenerator:
             body {{ padding: 1rem 0.5rem; }}
             h1 {{ font-size: 1.4rem; }}
             .featured-graph {{ padding: 0.75rem; }}
-            .thumbnail-grid {{ grid-template-columns: 1fr; }}
+            .month-section {{ padding: 0.5rem 0.75rem; }}
+            .month-grid {{ grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }}
         }}
     </style>
 </head>
@@ -309,17 +421,18 @@ class DashboardGenerator:
         <p class="subtitle">Historical Noise Archive</p>
         <nav class="summary-links">
             <a href="index.html">Latest</a>
-            <a href="weekly_summary.png">Weekly Summary</a>
-            <a href="monthly_summary.png">Monthly Summary</a>
+            <a href="{weekly_link}">Weekly Summary</a>
+            <a href="{monthly_link}">Monthly Summary</a>
+            <a href="all_time_trend.png">All-Time Trend</a>
         </nav>
     </header>
 
     <main>
         {featured_html}
+        {jump_html}
 
-        <h2 class="section-title">All Graphs</h2>
-        <div class="thumbnail-grid">
-            {thumbnails_html}
+        <div class="month-sections">
+            {month_sections}
         </div>
     </main>
 
@@ -331,14 +444,15 @@ class DashboardGenerator:
 </html>"""
 
     # ------------------------------------------------------------------
-    # Summary graphs
+    # Dated summaries (accumulating, never overwritten)
     # ------------------------------------------------------------------
 
     def generate_weekly_summary(self, end_date: date | None = None) -> str:
-        """Generate a weekly noise summary graph (last 7 days).
+        """Generate a weekly noise summary graph with a dated filename
+        in ``summaries/weekly_YYYY-MM-DD.png``.
 
         Args:
-            end_date: End date for the summary (default: today).
+            end_date: End date for the 7-day window (default: today).
 
         Returns:
             Path to the generated PNG file.
@@ -346,20 +460,23 @@ class DashboardGenerator:
         if end_date is None:
             end_date = date.today()
 
+        self._ensure_dir(self.summaries_dir)
         start_date = end_date - timedelta(days=6)
         daily_stats = self._compute_daily_stats(start_date, end_date)
 
-        output_path = os.path.join(self.gh_pages_dir, "weekly_summary.png")
+        output_name = f"weekly_{end_date.isoformat()}.png"
+        output_path = os.path.join(self.summaries_dir, output_name)
         self._render_summary_graph(
             daily_stats, "Weekly", start_date, end_date, output_path,
         )
         return output_path
 
     def generate_monthly_summary(self, end_date: date | None = None) -> str:
-        """Generate a monthly noise summary graph (last 30 days).
+        """Generate a monthly noise summary graph with a dated filename
+        in ``summaries/monthly_YYYY-MM.png``.
 
         Args:
-            end_date: End date for the summary (default: today).
+            end_date: End date for the 30-day window (default: today).
 
         Returns:
             Path to the generated PNG file.
@@ -367,14 +484,41 @@ class DashboardGenerator:
         if end_date is None:
             end_date = date.today()
 
+        self._ensure_dir(self.summaries_dir)
         start_date = end_date - timedelta(days=29)
         daily_stats = self._compute_daily_stats(start_date, end_date)
 
-        output_path = os.path.join(self.gh_pages_dir, "monthly_summary.png")
+        output_name = f"monthly_{end_date.strftime('%Y-%m')}.png"
+        output_path = os.path.join(self.summaries_dir, output_name)
         self._render_summary_graph(
             daily_stats, "Monthly", start_date, end_date, output_path,
         )
         return output_path
+
+    # ------------------------------------------------------------------
+    # All-time trend graph
+    # ------------------------------------------------------------------
+
+    def generate_all_time_trend(self) -> str:
+        """Generate an all-time noise trend graph.
+
+        Queries ALL data in the database, computes daily energy-average
+        Leq values, and renders a line chart with a 30-day rolling
+        average overlay and WHO guideline reference.
+
+        Output is ``all_time_trend.png`` in the gh-pages root.
+
+        Returns:
+            Path to the generated PNG file.
+        """
+        daily_leq = self._compute_all_daily_leq()
+        output_path = os.path.join(self.gh_pages_dir, "all_time_trend.png")
+        self._render_trend_graph(daily_leq, output_path)
+        return output_path
+
+    # ------------------------------------------------------------------
+    # Data helpers
+    # ------------------------------------------------------------------
 
     def _compute_daily_stats(
         self,
@@ -407,8 +551,56 @@ class DashboardGenerator:
         db.close()
         return stats_list
 
+    def _compute_all_daily_leq(
+        self,
+    ) -> list[tuple[date, float]]:
+        """Query ALL samples in the database, group by calendar day,
+        and compute the daily energy-average Leq for each day.
+
+        Returns a chronological list of ``(date, daily_Leq)`` tuples,
+        or an empty list if the database is empty.
+        """
+        db = NoiseDB(self.db_path)
+        db.initialize()
+
+        # Get the date range of available data
+        latest_ts = db.get_latest_timestamp()
+        if latest_ts is None:
+            db.close()
+            return []
+
+        earliest_row = db.conn.execute(
+            "SELECT MIN(ts) FROM noise_samples",
+        ).fetchone()
+        earliest_ts = (
+            earliest_row[0] if earliest_row[0] is not None else latest_ts
+        )
+
+        start_date = datetime.fromtimestamp(earliest_ts).date()
+        end_date = datetime.fromtimestamp(latest_ts).date()
+
+        daily: list[tuple[date, float]] = []
+        current = start_date
+        while current <= end_date:
+            day_start = datetime(
+                current.year, current.month, current.day, 0, 0, 0,
+            )
+            day_end = day_start.timestamp() + 86400
+            rows = db.query_range(day_start.timestamp(), day_end)
+            leq_values = [float(r[1]) for r in rows if r[1] is not None]
+
+            if leq_values:
+                energy_sum = sum(10.0 ** (v / 10.0) for v in leq_values)
+                daily_leq = 10.0 * math.log10(energy_sum / len(leq_values))
+                daily.append((current, daily_leq))
+
+            current += timedelta(days=1)
+
+        db.close()
+        return daily
+
     # ------------------------------------------------------------------
-    # Summary graph rendering (shared by weekly & monthly)
+    # Rendering — summary bar chart
     # ------------------------------------------------------------------
 
     def _render_summary_graph(
@@ -446,13 +638,13 @@ class DashboardGenerator:
             plt.close(fig)
             return
 
-        dates = [s[0] for s in daily_stats]
+        dates_list = [s[0] for s in daily_stats]
         l90_vals = [s[1]["L90"] for s in daily_stats]
         l50_vals = [s[1]["L50"] for s in daily_stats]
         l10_vals = [s[1]["L10"] for s in daily_stats]
         leq_vals = [s[1]["Leq"] for s in daily_stats]
 
-        x = np.arange(len(dates))
+        x = np.arange(len(dates_list))
         bar_width = 0.25
 
         # Grouped bars
@@ -486,7 +678,6 @@ class DashboardGenerator:
             label=f"WHO Guideline ({WHO_NIGHT_GUIDELINE_DB} dB)",
         )
 
-        # Labels, ticks, styling
         ax.set_xlabel("Date", color="#ccc")
         ax.set_ylabel("Sound Level (dB(A))", color="#ccc")
         ax.set_title(
@@ -497,7 +688,7 @@ class DashboardGenerator:
         )
         ax.set_xticks(x)
         ax.set_xticklabels(
-            [d.strftime("%m/%d") for d in dates],
+            [d.strftime("%m/%d") for d in dates_list],
             color="#ccc",
             rotation=45,
             ha="right",
@@ -523,13 +714,107 @@ class DashboardGenerator:
         plt.close(fig)
 
     # ------------------------------------------------------------------
+    # Rendering — all-time trend line chart
+    # ------------------------------------------------------------------
+
+    def _render_trend_graph(
+        self,
+        daily_leq: list[tuple[date, float]],
+        output_path: str,
+    ) -> None:
+        """Render a line chart of daily Leq values with a 30-day rolling
+        average overlay and WHO guideline reference line."""
+        fig, ax = plt.subplots(figsize=(16, 6))
+        fig.patch.set_facecolor("#1a1a2e")
+        ax.set_facecolor("#16213e")
+
+        if not daily_leq:
+            ax.text(
+                0.5,
+                0.5,
+                "No data available for all-time trend",
+                ha="center",
+                va="center",
+                fontsize=14,
+                color="#666",
+                transform=ax.transAxes,
+            )
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.axis("off")
+            fig.savefig(output_path, dpi=150, facecolor="#1a1a2e")
+            plt.close(fig)
+            return
+
+        dates_list = [d[0] for d in daily_leq]
+        leq_vals = [d[1] for d in daily_leq]
+
+        # Daily Leq — thin line
+        ax.plot(
+            dates_list, leq_vals,
+            linewidth=0.5, color="#4fc3f7", alpha=0.6,
+            label="Daily Leq",
+        )
+
+        # 30-day rolling average
+        if len(daily_leq) >= 30:
+            leq_arr = np.array(leq_vals, dtype=np.float64)
+            window = np.ones(30) / 30.0
+            rolling = np.convolve(leq_arr, window, mode="valid")
+            # Right-align: rolling[0] is centered at dates[29]
+            ax.plot(
+                dates_list[29:], rolling,
+                linewidth=2, color="#ffeb3b",
+                label="30-Day Rolling Average",
+            )
+
+        # WHO guideline
+        ax.axhline(
+            y=WHO_NIGHT_GUIDELINE_DB,
+            color="red",
+            linestyle="--",
+            linewidth=1,
+            alpha=0.7,
+            label=f"WHO Guideline ({WHO_NIGHT_GUIDELINE_DB} dB)",
+        )
+
+        ax.set_xlabel("Date", color="#ccc")
+        ax.set_ylabel("Sound Level (dB(A))", color="#ccc")
+        ax.set_title(
+            "All-Time Noise Trend \u2014 "
+            "Daily Leq with 30-Day Rolling Average",
+            color="#fff",
+            fontsize=14,
+        )
+        ax.tick_params(colors="#ccc")
+        ax.legend(
+            loc="upper right",
+            facecolor="#1a1a2e",
+            edgecolor="#333",
+            labelcolor="#e0e0e0",
+        )
+        ax.grid(True, alpha=0.15, color="#fff")
+        for spine in ax.spines.values():
+            spine.set_color("#333")
+
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=150, facecolor="#1a1a2e")
+        plt.close(fig)
+
+    # ------------------------------------------------------------------
     # Full dashboard
     # ------------------------------------------------------------------
 
-    def generate_dashboard(self) -> None:
-        """Run all generators to produce the full dashboard:
-        archive page + weekly summary + monthly summary.
+    def generate_dashboard(self) -> list[str]:
+        """Run all generators to produce the full dashboard.
+
+        Returns:
+            List of paths to all generated output files.
         """
-        self.generate_archive_page()
-        self.generate_weekly_summary()
-        self.generate_monthly_summary()
+        outputs: list[str] = []
+        outputs.append(self.generate_archive_page())
+        outputs.append(self.generate_weekly_summary())
+        outputs.append(self.generate_monthly_summary())
+        outputs.append(self.generate_all_time_trend())
+        return outputs

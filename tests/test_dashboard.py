@@ -1,4 +1,4 @@
-"""Tests for the dashboard generator (archive page + summary graphs)."""
+"""Tests for the dashboard generator (archive page + summary graphs + trend)."""
 
 import math
 import os
@@ -31,14 +31,9 @@ class TestComputeStatisticalLevels:
         """Two distinct values produce predictable percentiles."""
         vals = [50.0, 60.0]
         result = compute_statistical_levels(vals)
-        # Sorted: [50, 60], n=2
-        # L90 (10th percentile): (2-1)*0.1 = 0.1 → 50 + 0.1*10 = 51.0
         assert result["L90"] == pytest.approx(51.0, abs=0.5)
-        # L50 (50th percentile): (2-1)*0.5 = 0.5 → 50 + 0.5*10 = 55.0
         assert result["L50"] == pytest.approx(55.0, abs=0.5)
-        # L10 (90th percentile): (2-1)*0.9 = 0.9 → 50 + 0.9*10 = 59.0
         assert result["L10"] == pytest.approx(59.0, abs=0.5)
-        # Leq: 10*log10(mean(10^5 + 10^6))
         energy_mean = (10**5 + 10**6) / 2.0
         expected_leq = 10.0 * math.log10(energy_mean)
         assert result["Leq"] == pytest.approx(expected_leq, abs=0.5)
@@ -60,14 +55,9 @@ class TestComputeStatisticalLevels:
         """Three symmetric values around 50."""
         vals = [40.0, 50.0, 60.0]
         result = compute_statistical_levels(vals)
-        # Sorted: [40, 50, 60], n=3
-        # L90 (10th pctl): (3-1)*0.1 = 0.2 → 40 + 0.2*10 = 42.0
         assert result["L90"] == pytest.approx(42.0, abs=1.0)
-        # L50 (50th pctl): (3-1)*0.5 = 1.0 → 50.0
         assert result["L50"] == pytest.approx(50.0, abs=1.0)
-        # L10 (90th pctl): (3-1)*0.9 = 1.8 → 50 + 0.8*10 = 58.0
         assert result["L10"] == pytest.approx(58.0, abs=1.0)
-        # Leq: energy avg of [40,50,60]
         energy = (10**4 + 10**5 + 10**6) / 3.0
         assert result["Leq"] == pytest.approx(10.0 * math.log10(energy), abs=1.0)
 
@@ -81,8 +71,7 @@ class TestComputeStatisticalLevels:
 def gh_pages_dir() -> str:
     """Create a temporary gh-pages checkout directory."""
     tmp = tempfile.mkdtemp(suffix="-gh-pages")
-    graphs_dir = os.path.join(tmp, "graphs")
-    os.makedirs(graphs_dir, exist_ok=True)
+    os.makedirs(os.path.join(tmp, "graphs"), exist_ok=True)
     return tmp
 
 
@@ -95,14 +84,12 @@ def db_with_data() -> str:
     db = NoiseDB(db_path)
     db.initialize()
 
-    # Insert 3 days of data
     base_day = date(2026, 6, 19)
-    for day_offset in range(3):
+    for day_offset in range(5):  # 5 days for rolling avg tests
         day = base_day + timedelta(days=day_offset)
         start_ts = datetime(day.year, day.month, day.day, 0, 0, 0).timestamp()
         samples: list[tuple[float, float, float]] = []
         for second in range(86400):
-            # Vary Leq: quiet night (30 dB), louder day (45-55 dB)
             hour = second // 3600
             leq = (
                 30.0 + (second % 60) * 0.1
@@ -114,6 +101,44 @@ def db_with_data() -> str:
 
     db.close()
     return db_path
+
+
+@pytest.fixture
+def db_large() -> str:
+    """Create a temp database with 35 days of data (enough for rolling avg)."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as db_file:
+        db_path = db_file.name
+
+    db = NoiseDB(db_path)
+    db.initialize()
+
+    base_day = date(2026, 5, 20)
+    for day_offset in range(35):
+        day = base_day + timedelta(days=day_offset)
+        start_ts = datetime(day.year, day.month, day.day, 0, 0, 0).timestamp()
+        samples: list[tuple[float, float, float]] = []
+        for second in range(86400):
+            leq = 40.0 + (second % 3600) * 0.005
+            samples.append((start_ts + second, leq, leq + 6.0))
+        db.insert_samples(samples)
+
+    db.close()
+    return db_path
+
+
+# ======================================================================
+# PNG validation helper
+# ======================================================================
+
+
+def _is_valid_png(path: str) -> bool:
+    """Check if file exists, is non-empty, and has PNG header."""
+    if not os.path.exists(path):
+        return False
+    if os.path.getsize(path) < 100:
+        return False
+    with open(path, "rb") as f:
+        return f.read(8) == b"\x89PNG\r\n\x1a\n"
 
 
 # ======================================================================
@@ -137,36 +162,45 @@ class TestArchivePage:
     def test_archive_page_lists_available_graphs(
         self, gh_pages_dir: str, db_with_data: str,
     ) -> None:
-        """Graph files in directory are listed as thumbnails."""
-        # Create fake graph PNGs
+        """Graph files in directory are listed with month grouping."""
         graphs_dir = os.path.join(gh_pages_dir, "graphs")
-        for day_str in ["2026-06-19", "2026-06-20", "2026-06-21"]:
+        # Create graphs across two months
+        for day_str in ["2026-05-31", "2026-06-01", "2026-06-02"]:
             path = os.path.join(graphs_dir, f"noise_{day_str}.png")
             with open(path, "w") as f:
-                f.write("FAKE_PNG")  # not a real PNG, just for listing
+                f.write("FAKE_PNG")
 
         gen = DashboardGenerator(db_with_data, gh_pages_dir)
         result = gen.generate_archive_page()
         assert os.path.exists(result)
         with open(result, encoding="utf-8") as f:
             html = f.read()
-        assert "2026-06-19" in html
-        assert "2026-06-20" in html
-        assert "2026-06-21" in html
-        assert "graphs/noise_2026-06-19.png" in html
-        assert "thumbnail-grid" in html
+
+        # Should have month grouping headers
+        assert 'id="month-2026-06"' in html
+        assert 'id="month-2026-05"' in html
+        assert "2026 June" in html
+        assert "2026 May" in html
+        # Should have day counts
+        assert "June (2 days)" in html or "June (2 day" in html
+        assert "May (1 day)" in html or "May (1 day)" in html
+
+        # Should list all graphs
+        assert "graphs/noise_2026-06-01.png" in html
+        assert "graphs/noise_2026-06-02.png" in html
+        assert "graphs/noise_2026-05-31.png" in html
 
     def test_archive_page_has_navigation_links(
         self, gh_pages_dir: str,
     ) -> None:
-        """Archive page includes links to index, weekly, and monthly."""
+        """Archive page includes links to index, summaries, and trend."""
         gen = DashboardGenerator(":memory:", gh_pages_dir)
         result = gen.generate_archive_page()
         with open(result, encoding="utf-8") as f:
             html = f.read()
         assert 'href="index.html"' in html
-        assert 'href="weekly_summary.png"' in html
-        assert 'href="monthly_summary.png"' in html
+        assert "All-Time Trend" in html
+        assert 'href="all_time_trend.png"' in html
 
 
 # ======================================================================
@@ -177,48 +211,90 @@ class TestArchivePage:
 class TestSummaryGraphs:
     """Tests for weekly and monthly summary PNG generation."""
 
-    def _is_valid_png(self, path: str) -> bool:
-        """Check if file exists, is non-empty, and has PNG header."""
-        if not os.path.exists(path):
-            return False
-        size = os.path.getsize(path)
-        if size < 100:  # PNGs are at least a few hundred bytes
-            return False
-        with open(path, "rb") as f:
-            header = f.read(8)
-        return header == b"\x89PNG\r\n\x1a\n"
-
     def test_weekly_summary_generates_png(
         self, gh_pages_dir: str, db_with_data: str,
     ) -> None:
-        """Weekly summary creates a valid PNG."""
+        """Weekly summary creates a valid dated PNG in summaries/."""
         gen = DashboardGenerator(db_with_data, gh_pages_dir)
         end_date = date(2026, 6, 21)
         result = gen.generate_weekly_summary(end_date=end_date)
-        assert result.endswith("weekly_summary.png")
-        assert self._is_valid_png(result)
+        assert "summaries" in result
+        assert result.endswith("weekly_2026-06-21.png")
+        assert _is_valid_png(result)
 
     def test_monthly_summary_generates_png(
         self, gh_pages_dir: str, db_with_data: str,
     ) -> None:
-        """Monthly summary creates a valid PNG."""
+        """Monthly summary creates a valid dated PNG in summaries/."""
         gen = DashboardGenerator(db_with_data, gh_pages_dir)
         end_date = date(2026, 6, 21)
         result = gen.generate_monthly_summary(end_date=end_date)
-        assert result.endswith("monthly_summary.png")
-        assert self._is_valid_png(result)
+        assert "summaries" in result
+        assert result.endswith("monthly_2026-06.png")
+        assert _is_valid_png(result)
 
     def test_weekly_summary_no_data(self, gh_pages_dir: str) -> None:
         """Weekly summary with empty DB still produces a PNG."""
         gen = DashboardGenerator(":memory:", gh_pages_dir)
         result = gen.generate_weekly_summary(end_date=date(2026, 6, 21))
-        assert self._is_valid_png(result)
+        assert _is_valid_png(result)
 
     def test_monthly_summary_no_data(self, gh_pages_dir: str) -> None:
         """Monthly summary with empty DB still produces a PNG."""
         gen = DashboardGenerator(":memory:", gh_pages_dir)
         result = gen.generate_monthly_summary(end_date=date(2026, 6, 21))
-        assert self._is_valid_png(result)
+        assert _is_valid_png(result)
+
+    def test_summaries_not_overwritten(
+        self, gh_pages_dir: str, db_with_data: str,
+    ) -> None:
+        """Running weekly summary twice with same end date produces
+        the same filename (no timestamp or random suffix)."""
+        gen = DashboardGenerator(db_with_data, gh_pages_dir)
+
+        r1 = gen.generate_weekly_summary(end_date=date(2026, 6, 21))
+        r2 = gen.generate_weekly_summary(end_date=date(2026, 6, 21))
+        assert r1 == r2
+        assert os.path.exists(r1)
+
+        r3 = gen.generate_monthly_summary(end_date=date(2026, 6, 21))
+        r4 = gen.generate_monthly_summary(end_date=date(2026, 6, 21))
+        assert r3 == r4
+        assert os.path.exists(r3)
+
+
+# ======================================================================
+# All-time trend graph
+# ======================================================================
+
+
+class TestAllTimeTrend:
+    """Tests for the all-time trend graph."""
+
+    def test_all_time_trend_generates_png(
+        self, gh_pages_dir: str, db_with_data: str,
+    ) -> None:
+        """All-time trend with data produces a valid PNG."""
+        gen = DashboardGenerator(db_with_data, gh_pages_dir)
+        result = gen.generate_all_time_trend()
+        assert result.endswith("all_time_trend.png")
+        assert _is_valid_png(result)
+
+    def test_all_time_trend_empty_db(self, gh_pages_dir: str) -> None:
+        """All-time trend with empty DB produces valid placeholder PNG."""
+        gen = DashboardGenerator(":memory:", gh_pages_dir)
+        result = gen.generate_all_time_trend()
+        assert _is_valid_png(result)
+
+    def test_all_time_trend_large_dataset(
+        self, gh_pages_dir: str, db_large: str,
+    ) -> None:
+        """All-time trend with 35+ days includes a rolling average line."""
+        gen = DashboardGenerator(db_large, gh_pages_dir)
+        result = gen.generate_all_time_trend()
+        assert _is_valid_png(result)
+        # 35 days of data should produce a non-trivial image
+        assert os.path.getsize(result) > 2000
 
 
 # ======================================================================
@@ -233,31 +309,54 @@ class TestDashboardGenerator:
         self, gh_pages_dir: str, db_with_data: str,
     ) -> None:
         """Calling generate_dashboard() produces all expected outputs."""
-        # Create at least one graph to exercise the archive
         graphs_dir = os.path.join(gh_pages_dir, "graphs")
         path = os.path.join(graphs_dir, "noise_2026-06-21.png")
         with open(path, "w") as f:
             f.write("FAKE_PNG")
 
         gen = DashboardGenerator(db_with_data, gh_pages_dir)
-        gen.generate_dashboard()
+        outputs = gen.generate_dashboard()
+
+        # Should return paths to all outputs
+        assert len(outputs) == 4
 
         # Check all outputs exist
         assert os.path.exists(os.path.join(gh_pages_dir, "archive.html"))
-        assert os.path.exists(os.path.join(gh_pages_dir, "weekly_summary.png"))
-        assert os.path.exists(os.path.join(gh_pages_dir, "monthly_summary.png"))
+        assert os.path.exists(os.path.join(gh_pages_dir, "all_time_trend.png"))
+
+        # Summaries in summaries/
+        summaries_dir = os.path.join(gh_pages_dir, "summaries")
+        assert os.path.isdir(summaries_dir)
+
+        # At least one weekly and one monthly file should exist
+        weekly_files = [f for f in os.listdir(summaries_dir) if f.startswith("weekly_")]
+        monthly_files = [f for f in os.listdir(summaries_dir) if f.startswith("monthly_")]
+        assert len(weekly_files) >= 1
+        assert len(monthly_files) >= 1
 
         # Verify HTML is not empty
         with open(os.path.join(gh_pages_dir, "archive.html"), encoding="utf-8") as f:
             html = f.read()
-        assert len(html) > 500  # substantial HTML content
+        assert len(html) > 500
         assert "Noise Catcher" in html
 
-    def test_generate_dashboard_empty_db(self, gh_pages_dir: str) -> None:
+    def test_generate_dashboard_empty_db(
+        self, gh_pages_dir: str,
+    ) -> None:
         """Dashboard generation with empty DB produces all files (no crash)."""
         gen = DashboardGenerator(":memory:", gh_pages_dir)
-        gen.generate_dashboard()
-
+        outputs = gen.generate_dashboard()
+        assert len(outputs) == 4
         assert os.path.exists(os.path.join(gh_pages_dir, "archive.html"))
-        assert os.path.exists(os.path.join(gh_pages_dir, "weekly_summary.png"))
-        assert os.path.exists(os.path.join(gh_pages_dir, "monthly_summary.png"))
+        assert os.path.exists(os.path.join(gh_pages_dir, "all_time_trend.png"))
+
+    def test_generate_dashboard_returns_paths(
+        self, gh_pages_dir: str, db_with_data: str,
+    ) -> None:
+        """generate_dashboard() returns paths to all generated files."""
+        gen = DashboardGenerator(db_with_data, gh_pages_dir)
+        outputs = gen.generate_dashboard()
+        assert isinstance(outputs, list)
+        assert len(outputs) == 4
+        for path in outputs:
+            assert os.path.exists(path), f"Output missing: {path}"
