@@ -68,6 +68,33 @@ else
     echo "WARNING: ${LOGROTATE_SRC} not found — skipping logrotate"
 fi
 
+# --- Logs directory for cron output -----------------------------------------
+echo ">>> Creating logs directory..."
+mkdir -p "${REPO_DIR}/logs"
+
+# --- Crontab for daily graph publishing ------------------------------------
+echo ">>> Installing crontab for daily graph publishing (pi user)..."
+CRON_SRC="${REPO_DIR}/deploy/crontab.txt"
+if [[ -f "${CRON_SRC}" ]]; then
+    if sudo -u pi crontab -l 2>/dev/null | grep -q publish-daily; then
+        echo ">>> Crontab entry already exists, skipping."
+    else
+        (sudo -u pi crontab -l 2>/dev/null; cat "${CRON_SRC}") | sudo -u pi crontab -
+        echo ">>> Crontab installed."
+    fi
+else
+    echo "WARNING: ${CRON_SRC} not found — skipping crontab installation"
+fi
+
+# --- Initial graph publication ---------------------------------------------
+echo ">>> Generating initial graph..."
+if [[ -x "${REPO_DIR}/deploy/publish-daily.sh" ]]; then
+    sudo -u pi "${REPO_DIR}/deploy/publish-daily.sh" || \
+        echo "WARNING: Initial graph publish failed (expected if no data yet)"
+else
+    echo "WARNING: publish-daily.sh not found — skipping initial graph"
+fi
+
 # --- Status -----------------------------------------------------------------
 echo ""
 echo "=== Setup complete ==="

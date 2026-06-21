@@ -1,0 +1,1 @@
+0 2 * * * /home/pi/noise-catcher/deploy/publish-daily.sh >> /home/pi/noise-catcher/logs/publish.log 2>&1
